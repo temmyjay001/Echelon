@@ -1,44 +1,61 @@
-const express = require('express');
-const fs = require('fs');
-const path = require('path');
+const express = require("express");
+const fs = require("fs").promises;
+const path = require("path");
 const router = express.Router();
-const DATA_PATH = path.join(__dirname, '../../../data/items.json');
+const DATA_PATH = path.join(__dirname, "../../../data/items.json");
 
-// Utility to read data (intentionally sync to highlight blocking issue)
-function readData() {
-  const raw = fs.readFileSync(DATA_PATH);
+// Utility to read data (now async)
+async function readData() {
+  const raw = await fs.readFile(DATA_PATH, "utf8");
   return JSON.parse(raw);
 }
 
-// GET /api/items
-router.get('/', (req, res, next) => {
+// GET /api/items - with pagination and search
+router.get("/", async (req, res, next) => {
   try {
-    const data = readData();
-    const { limit, q } = req.query;
+    const data = await readData();
+    const { limit = 10, page = 1, q } = req.query;
+
     let results = data;
 
+    // Simple substring search
     if (q) {
-      // Simple substring search (sub‑optimal)
-      results = results.filter(item => item.name.toLowerCase().includes(q.toLowerCase()));
+      results = results.filter(
+        (item) =>
+          item.name.toLowerCase().includes(q.toLowerCase()) ||
+          item.category.toLowerCase().includes(q.toLowerCase())
+      );
     }
 
-    if (limit) {
-      results = results.slice(0, parseInt(limit));
-    }
+    // Pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
 
-    res.json(results);
+    const paginatedResults = results.slice(startIndex, endIndex);
+
+    res.json({
+      data: paginatedResults,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: results.length,
+        totalPages: Math.ceil(results.length / limitNum),
+      },
+    });
   } catch (err) {
     next(err);
   }
 });
 
 // GET /api/items/:id
-router.get('/:id', (req, res, next) => {
+router.get("/:id", async (req, res, next) => {
   try {
-    const data = readData();
-    const item = data.find(i => i.id === parseInt(req.params.id));
+    const data = await readData();
+    const item = data.find((i) => i.id === parseInt(req.params.id));
     if (!item) {
-      const err = new Error('Item not found');
+      const err = new Error("Item not found");
       err.status = 404;
       throw err;
     }
@@ -48,15 +65,25 @@ router.get('/:id', (req, res, next) => {
   }
 });
 
-// POST /api/items
-router.post('/', (req, res, next) => {
+// POST /api/items - with basic validation
+router.post("/", async (req, res, next) => {
   try {
-    // TODO: Validate payload (intentional omission)
-    const item = req.body;
-    const data = readData();
-    item.id = Date.now();
+    const { name, category, price } = req.body;
+
+    // Basic validation
+    if (!name || !category || typeof price !== "number") {
+      const err = new Error(
+        "Missing or invalid required fields: name, category, price"
+      );
+      err.status = 400;
+      throw err;
+    }
+
+    const data = await readData();
+    const item = { id: Date.now(), name, category, price };
     data.push(item);
-    fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2));
+
+    await fs.writeFile(DATA_PATH, JSON.stringify(data, null, 2));
     res.status(201).json(item);
   } catch (err) {
     next(err);
